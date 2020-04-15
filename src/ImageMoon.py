@@ -114,6 +114,13 @@ class ImageMoon:
         _, img_big_rocks = cv.threshold(b_img[0], 127, 255, cv.THRESH_BINARY)
         return img_big_rocks
 
+    def nb_pixels_in_rock(self):
+        self.make_results()
+        b_img = cv.split(self.ground)
+        nb_pix = cv.countNonZero(b_img[0]) + cv.countNonZero(b_img[1])
+        nb_predicted = cv.countNonZero(cv.cvtColor(self.result, cv.COLOR_BGR2GRAY))
+        return abs(nb_pix - nb_predicted)
+
     def find_threshold_no_sky(self, percentage):
         j = 10
         thresh_value = 0
@@ -130,12 +137,12 @@ class ImageMoon:
         ret, thresh1 = cv.threshold(self.render_blur, thresh, 255, cv.THRESH_BINARY)
         return thresh1
 
-    def plot_results(self):
+    def make_results(self):
         mask = np.zeros(self.shape(), np.uint8)
         mask = cv.cvtColor(mask, cv.COLOR_GRAY2BGR)
         cv.drawContours(mask, self.contours_small, -1, (255, 0, 0), -1)
         cv.drawContours(mask, self.contours_big, -1, (0, 0, 255), -1)
-        return mask
+        self.result = mask
 
     def find_contours(self, thresh):
         ret, img = cv.threshold(self.render_blur, thresh, 255, cv.THRESH_BINARY)
