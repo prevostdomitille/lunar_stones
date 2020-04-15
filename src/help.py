@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 
+
 def plotter(image, title="test"):
   fig, ax = plt.subplots(1)
   ax.axis('off')
@@ -20,6 +21,7 @@ def plotter_mult(*args, title=[]):
             ax.title.set_text(title[i])
         plt.imshow(args[i])
     plt.show()
+
 
 def to_string(img_number):
     leng = len(str(img_number))

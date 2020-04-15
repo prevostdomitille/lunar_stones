@@ -3,8 +3,7 @@ import copy
 import cv2 as cv
 import numpy as np
 import matplotlib.pyplot as plt
-from src.help import to_string, plotter_mult, plotter
-from tabulate import tabulate
+from src.help import to_string, plotter_mult
 
 PATH = "/Users/domitilleprevost/Documents/PROJET_DEEP/artificial-lunar-rocky-landscape-dataset/images/"
 
@@ -13,22 +12,33 @@ def count_pixels(image, grey_level):
     return np.count_nonzero(image < grey_level)
 
 
-def find_criteria(list_contours, nb_big_rocks):
+def find_criteria(list_contours, percentage_big_rocks):
+    """
+    Given a list of items, return the value that
+    represents a threshold under which a certain
+    proportion of the values (= percentage_big_rockes)
+    are situated.
+    """
     list_copy = copy.deepcopy(list_contours)
     list_copy.sort()
-    length = int(len(list_copy) * nb_big_rocks)  # empirical
-    thresh = 0
+    length = int(len(list_copy) * percentage_big_rocks)  # empirical
+    criteria = 0
     if length:
-        thresh = list_copy[-length]
-    return thresh
+        criteria = list_copy[-length]
+    return criteria
 
 
-def find_criteria_by_perspective(contours, nb_big_rocks):
+def make_list_values_of_contours(contours):
+    """
+
+    :param contours: A list of contours detected on the image. Datatype : cv.contours
+    :return: A list of values for the contours, computed as a function of size and distance
+    """
     list_contours = []
     for cont in contours:
         bottommost = tuple(cont[cont[:, :, 1].argmin()][0])
         list_contours.append((470 - bottommost[1]) * (cv.contourArea(cont) + 10))  # empirical
-    return (find_criteria(list_contours, nb_big_rocks)), list_contours
+    return list_contours
 
 
 def make_centers(contours):
@@ -91,16 +101,17 @@ class ImageMoon:
         return self.render.shape
 
     def disp_truth(self):
-        plotter_mult(self.ground, self.img_small_rocks(), self.img_big_rocks(), title=["ground_truth", "Small rocks", "Big rocks"])
+        plotter_mult(self.ground, self.truth_small_rocks(), self.truth_big_rocks(),
+                     title=["ground_truth", "Small rocks", "Big rocks"])
 
     def truth_small_rocks(self):
-        bImg = cv.split(self.ground)
-        _, img_small_rocks = cv.threshold(bImg[1], 127, 255, cv.THRESH_BINARY)
+        b_img = cv.split(self.ground)
+        _, img_small_rocks = cv.threshold(b_img[1], 127, 255, cv.THRESH_BINARY)
         return img_small_rocks
 
     def truth_big_rocks(self):
-        bImg = cv.split(self.ground)
-        _, img_big_rocks = cv.threshold(bImg[0], 127, 255, cv.THRESH_BINARY)
+        b_img = cv.split(self.ground)
+        _, img_big_rocks = cv.threshold(b_img[0], 127, 255, cv.THRESH_BINARY)
         return img_big_rocks
 
     def find_threshold_no_sky(self, percentage):
@@ -109,7 +120,7 @@ class ImageMoon:
         nb_pixels = (count_pixels(self.render, 255) - count_pixels(self.render, 10))
         while j < 255:
             cur = (count_pixels(self.render, (j + 1)) - count_pixels(self.render,
-                                                                    10)) / nb_pixels  # - count_pixels(image, j * 10)
+                                                                     10)) / nb_pixels  # - count_pixels(image, j * 10)
             if cur > percentage and thresh_value == 0:
                 thresh_value = j + 1
             j = j + 1
@@ -131,25 +142,25 @@ class ImageMoon:
         contours, image = cv.findContours(img, cv.RETR_TREE, cv.CHAIN_APPROX_NONE)
         self.contours = contours
 
-    def filter_contours(self, contours, nb_big_rocks):
+    def filter_contours(self, contours, nb_big_rocks, min_value):
         contours_big = []
         contours_small = []
-        thresh, list_values = find_criteria_by_perspective(contours, nb_big_rocks)
+        list_values = make_list_values_of_contours(contours)
+        criteria = find_criteria(list_values, nb_big_rocks)
         for i in range(len(contours)):
-            area = cv.contourArea(contours[i])
             hull = cv.convexHull(contours[i])
-            if list_values[i] > thresh and list_values[i] > 8000:
+            if list_values[i] > criteria and list_values[i] > min_value:
                 contours_big.append(hull)
-            elif list_values[i] > 8000:  # empirical
+            elif list_values[i] > min_value:
                 contours_small.append(hull)
         self.contours_small = contours_small
         self.contours_big = contours_big
         return contours_small, contours_big
 
-    def make_contours(self, percentage_luminosity, nb_big_rocks):
+    def make_contours(self, percentage_luminosity, nb_big_rocks, min_value):
         thresh_luminosity = self.find_threshold_no_sky(percentage_luminosity)
         self.find_contours(thresh_luminosity)
-        self.prediction = self.filter_contours(self.contours, nb_big_rocks)
+        self.prediction = self.filter_contours(self.contours, nb_big_rocks, min_value)
 
     def compute_score(self):
         centers_big = make_centers(self.contours_big)
@@ -171,7 +182,6 @@ class ImageMoon:
         # print(tabulate(mydata, headers))
         return true_pos_any, false_pos_any
 
-
     def cumulated_histogram_dense(self):
         t = np.zeros(245)
         x = np.arange(10, 255)
@@ -179,7 +189,8 @@ class ImageMoon:
         nb_pixels = (count_pixels(self.render, 255) - count_pixels(self.render, 10))
         while j < 255:
             t[j - 10] = (count_pixels(self.render, (j + 1)) - count_pixels(self.render,
-                                                                     10)) / nb_pixels  # - count_pixels(image, j * 10)
+                                                                           10)) / nb_pixels  # - count_pixels(image,
+            # j * 10)
             j = j + 1
         plt.title("Histogramme dense sans le ciel")
         plt.legend()
