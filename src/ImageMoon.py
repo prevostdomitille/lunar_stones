@@ -57,9 +57,12 @@ def make_centers(contours):
     return centers
 
 
-def draw_centers(image, centers, color=""):
+def plot_centers(image, centers, color=""):
     """
+    :param color: default = white. Can be "green" for green dots or "red" for red dots.
 
+    Draws the centers given as arguments on the image given as argument.
+    Plots the figure
     """
 
     im = copy.deepcopy(image)
@@ -72,7 +75,6 @@ def draw_centers(image, centers, color=""):
         else:
             cv.circle(im, (cent[0], cent[1]), 5, (255, 255, 255), -1)
     plotter(im)
-    return centers
 
 
 def compute_accuracy_positives(centers, truth):
@@ -102,6 +104,28 @@ def find_threshold_no_sky(percentage, image):
     return thresh_value
 
 
+def score(cont, truth, plot=False):
+    center = make_centers(cont)
+    if plot:
+        plot_centers(truth, center, color="green")
+    return compute_accuracy_positives(center, truth)
+
+
+def score_jaccard(truth, pred):
+    """
+
+    :param truth: image black and white
+    :param pred: image black and white
+    :return: Le score de jaccard entre les deux images
+    """
+    intersec = cv.bitwise_and(truth, pred)
+    union = cv.bitwise_or(truth, pred)
+    if cv.countNonZero(union) == 0:
+        return 0
+    jaccard_score = cv.countNonZero(intersec) / cv.countNonZero(union)
+    return jaccard_score
+
+
 class ImageMoon:
 
     def __init__(self, img_number: int):
@@ -120,6 +144,7 @@ class ImageMoon:
             raise ValueError(f"image {self.name_render} not found")
 
     def ground_gray(self):
+        """Ground truth image in black and white without the sky"""
         sp = cv.split(self.ground)
         mask = sp[0] + sp[1]
         return mask
@@ -128,20 +153,28 @@ class ImageMoon:
         return self.render.shape
 
     def truth_big_rocks(self):
+        """Returns the ground truth for only big rocks in black and white"""
         b_img = cv.split(self.ground)
         _, img_big_rocks = cv.threshold(b_img[0], 127, 255, cv.THRESH_BINARY)
         return img_big_rocks
 
     def truth_small_rocks(self):
+        """Returns the ground truth for only small rocks in black and white"""
+
         b_img = cv.split(self.ground)
         _, img_small_rocks = cv.threshold(b_img[1], 127, 255, cv.THRESH_BINARY)
         return img_small_rocks
 
-    def disp_truth(self):
+    def plot_truth(self):
+        """Plots the ground truth"""
         plotter_mult(self.ground, self.truth_small_rocks(), self.truth_big_rocks(),
                      title=["ground_truth", "Small rocks", "Big rocks"])
 
     def prediction_image(self):
+        """
+
+        Creates an image of predicted rocks
+        """
         mask = np.zeros(self.shape(), np.uint8)
         mask = cv.cvtColor(mask, cv.COLOR_GRAY2BGR)
         cv.drawContours(mask, self.contours_small, -1, (255, 0, 0), -1)
@@ -169,55 +202,66 @@ class ImageMoon:
         contours, image = cv.findContours(img, cv.RETR_TREE, cv.CHAIN_APPROX_NONE)
         self.contours = contours
 
-    def make_contours(self, percentage_luminosity, nb_big_rocks, min_value):
+    def make_contours(self, percentage_luminosity=0.99, nb_big_rocks=0.1, min_value=6000):
         thresh_luminosity = find_threshold_no_sky(percentage_luminosity, self.render)
         self.find_contours(thresh_luminosity)
         self.filter_contours(self.contours, nb_big_rocks, min_value)
+        self.prediction_image()
 
     def score_false_negatives(self):
-        self.prediction_image()
         nb_pix = cv.countNonZero(self.ground_gray())
         nb_predicted = cv.countNonZero(cv.cvtColor(self.prediction, cv.COLOR_BGR2GRAY))
         return abs(nb_pix - nb_predicted) / nb_pix
 
-    def score_false_positives(self):
-        centers = make_centers(self.contours)
-        true_pos_any, false_pos_any = compute_accuracy_positives(centers, self.ground_gray())
+    def score_false_positives_any(self):
+        true_pos_any, false_pos_any = score(self.contours, self.ground_gray())
         if len(self.contours) == 0:
             return true_pos_any
         return true_pos_any / len(self.contours)
 
-    def score_jaccard(self):
-        self.prediction_image()
-        truth = self.ground_gray()
-        pred = cv.cvtColor(self.prediction, cv.COLOR_BGR2GRAY)
-        intersec = cv.bitwise_and(truth, pred)
-        union = cv.bitwise_or(truth, pred)
-        if cv.countNonZero(union) == 0:
+    def score_false_positives_classified(self):
+        """Returns a measure of the quality of the classification :
+        Well-classified_rocks / all well detected rocks"""
+        true_pos_big, _ = score(self.contours_big, self.truth_big_rocks())
+        true_pos_small, _ = score(self.contours_small, self.truth_small_rocks())
+        true_pos_any, _ = score(self.contours, self.ground_gray())
+        if not true_pos_any:
             return 0
-        jaccard_score = cv.countNonZero(intersec) / cv.countNonZero(union)
-        return jaccard_score
+        return (true_pos_big + true_pos_small) / true_pos_any
 
-    def detailed_scores_false_positives(self):
-        if not self.contours_big:
-            self.make_contours(0.99, 0.1, 8000)
+    def scores_jaccard_classified(self):
+        """Computes the number of well classified pixels on all the well detected pixels"""
+        pred = cv.split(self.prediction)
+        all_good_pixels = cv.countNonZero(cv.bitwise_and(self.ground_gray(), pred[0] + pred[2]))
+        good_smalls = cv.countNonZero(cv.bitwise_and(self.truth_small_rocks(), pred[0]))
+        good_big = cv.countNonZero(cv.bitwise_and(self.truth_big_rocks(), pred[2]))
+        if not all_good_pixels:
+            print("error")
+            return 0
+        return (good_big + good_smalls) / all_good_pixels
 
-        centers_big = make_centers(self.contours_big)
-        centers_small = make_centers(self.contours_small)
-        centers = make_centers(self.contours)
+    def scores_jaccard(self):
+        pred = cv.split(self.prediction)
+        score_any = score_jaccard(self.ground_gray(), pred[0] + pred[2])
+        score_small = score_jaccard(self.truth_small_rocks(), pred[0])
+        score_big = score_jaccard(self.truth_big_rocks(), pred[2])
 
-        draw_centers(self.truth_big_rocks(), centers_big, color="green")
-        draw_centers(self.truth_small_rocks(), centers_small, color="green")
-        true_pos_big, false_pos_big = compute_accuracy_positives(centers_small, self.truth_small_rocks())
-        true_pos_small, false_pos_small = compute_accuracy_positives(centers_big, self.truth_big_rocks())
-        true_pos_any, false_pos_any = compute_accuracy_positives(centers, self.ground_gray())
+        return score_any, score_small, score_big
 
-        mydata = [("Petites roches", "|", true_pos_big, false_pos_big),
-                  ("Grandes roches", "|", true_pos_small, false_pos_small),
-                  ("Toutes roches", "|", true_pos_any, false_pos_any)]
-        headers = ["Type", "", "Vrai positif", "Faux positifs"]
+
+    def detailed_scores_false_positives(self, plot=False):
+        if not self.contours:
+            return 0, 1
+        true_pos_big, false_pos_big = score(self.contours_big, self.truth_big_rocks(), plot)
+        true_pos_small, false_pos_small = score(self.contours_small, self.truth_small_rocks(), plot)
+        true_pos_any, false_pos_any = score(self.contours, self.ground_gray(), plot)
+        score_any, score_small, score_big = self.scores_jaccard()
+
+        mydata = [("Petites roches", "|", true_pos_big, false_pos_big, score_small),
+                  ("Grandes roches", "|", true_pos_small, false_pos_small, score_big),
+                  ("Toutes roches", "|", true_pos_any, false_pos_any, score_any)]
+        headers = ["Type", "", "Vrai positif", "Faux positifs", "Jaccard"]
         print(tabulate.tabulate(mydata, headers))
-        return true_pos_any, false_pos_any
 
     def cumulated_histogram_dense(self):
         t = np.zeros(245)
@@ -236,14 +280,13 @@ class ImageMoon:
         return t
 
 
-if __name__ == "__main__":
-    im = ImageMoon(2)
+def validation():
+    arr = []
     for i in range(300, 500):
         im = ImageMoon(i)
-        im.make_contours(0.97, 0.1, 1000)
-        im.score_jaccard()
+        im.make_contours(0.97, 0.1, 6000)
+        arr.append(im.score_false_positives_any())
+    plt.hist(arr)
 
-    im.make_contours(0.97, 0.1, 1000)
-    print(im.score_false_negatives())
-    im.score_jaccard()
-    print(im.shape()[0])
+if __name__ == "__main__":
+    validation()

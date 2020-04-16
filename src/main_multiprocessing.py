@@ -7,7 +7,15 @@ import pickle
 from src import ImageMoon
 
 
-def store_results(arr, title_test, nb_images):
+def store_results(arr, title_test, min_img, max_img, param_range):
+    """
+
+    :param arr: The object to store
+    :param title_test: "Name to identify the test"
+    :param nb_images: Number of images for this test
+    Dumps in two files the results for reuse and print in another
+    file the results for monitoring
+    """
     best_score = 0
     best_index = 0
     for j in range(len(arr[:])):
@@ -17,68 +25,84 @@ def store_results(arr, title_test, nb_images):
     with open(f'results/scores_{title_test}', 'wb') as fp:
         pickle.dump(arr[:], fp)
     with open(f'results/thresh_optimal_{title_test}', 'wb') as fp:
-        result = {"threshold optimal": best_index, "score optimal": best_score}
+        result = {"threshold optimal": best_index, "score optimal": best_score / (max_img - min_img)}
         pickle.dump(result, fp)
     with open(f"results/readable_{title_test}.txt", "w") as fp:
-        fp.write(f"best index :  {0.95 + best_index / 1000}\nbest score : {best_score }\n")
-        fp.write(f"Nombre d'images : {nb_images}")
+        fp.write(f"best index :  {param_range[best_index]}\nbest score : {best_score / (max_img - min_img) }\n")
+        fp.write(f"Nombre d'images : {max_img - min_img}")
 
 
-def run(img_number, scores_count, scores_jaccard, t):
+def run(img_number, scores_1, scores_2, params):
+    """
+    Computes the scores for parameters in the range provided by params and store it in
+    objects scores_count and scores_jaccard
+    """
     img = ImageMoon.ImageMoon(img_number)
-    tmp_score_count = np.zeros(len(t))
-    tmp_jaccard = np.zeros(len(t))
-    for j in range(len(t)):
-        percent = t[j]
-        img.make_contours(percent, 0.1, 7000)
-        tmp_score_count[j] = tmp_score_count[j] + img.score_false_positives()
-        tmp_jaccard[j] = tmp_jaccard[j] + img.score_jaccard()
-    for itr in range(len(t)):
-        scores_count[itr] = scores_count[itr] + tmp_score_count[itr]
-        scores_jaccard[itr] = scores_jaccard[itr] + tmp_jaccard[itr]
+    tmp_1 = np.zeros(len(params))
+    tmp_2 = np.zeros(len(params))
+    for j in range(len(params)):
+        par = params[j]
+        img.make_contours(0.99, par, 6000)
+        tmp_1[j] = tmp_1[j] + img.scores_jaccard_classified()
+        tmp_2[j] = tmp_2[j] + img.score_false_positives_classified()
+    for itr in range(len(params)):
+        scores_1[itr] = scores_1[itr] + tmp_1[itr]
+        scores_2[itr] = scores_2[itr] + tmp_2[itr]
 
 
-def do_job(tasks_to_accomplish, scores_count, scores_jaccard, t):
+def do_job(tasks_to_accomplish, scores_count, scores_jaccard, params):
+    """
+    Until there is no more image to treat in the queue of images, treat next image
+    """
     while True:
         try:
             img_number = tasks_to_accomplish.get_nowait()
         except queue.Empty:
             break
         else:
-            run(img_number, scores_count, scores_jaccard, t)
+            run(img_number, scores_count, scores_jaccard, params)
 
 
 if __name__ == "__main__":
     lock = Lock()
-    number_of_processes = 8
-    tasks_to_accomplish = Queue()
-    processes = []
-    # the images to make the statistics on
-    min_img = 500
-    max_img = 700
-    ran = range(min_img, max_img)
-    # the threshold is the percentage of the image that is a rock
-    t = np.linspace(0.90, 0.990, num=100)
-    scores_jac = Array('d', len(t), lock=lock)
-    # the scores for a threshold varying from 0.95 to 1
-    scores = Array('d', len(t), lock=lock)
 
-    for i in ran:
+    # Chose the images to work on
+    min_img = 700
+    max_img = 900
+    nb_images = max_img - min_img
+    # Chose the range of the parameter we want to evaluate
+    param_range = np.linspace(0.05, 0.3, num=50)
+    # the scores for parameter varying in param_range
+    # they are multiprocessing objects
+    scores_1 = Array('d', len(param_range), lock=lock)
+    scores_2 = Array('d', len(param_range), lock=lock)
+
+    # Create a list of images to treat
+    tasks_to_accomplish = Queue()
+    for i in range(min_img, max_img):
         tasks_to_accomplish.put(i)
     start = timeit.timeit()
 
+    # To be set according to the number of kernels of the computer
+    number_of_processes = 8
+    processes = []
+
+    # Start the processes
     for w in range(number_of_processes):
-        p = Process(target=do_job, args=(tasks_to_accomplish, scores, scores_jac, t))
+        p = Process(target=do_job, args=(tasks_to_accomplish, scores_1, scores_2, param_range))
         processes.append(p)
         p.start()
 
     for p in processes:
         p.join()
 
-    store_results(scores, "False negative optimisation", 300)
-    plt.plot(t, [i / 30 for i in scores], label="Rock Count")
-    plt.plot(t, scores_jac, label=f"Jaccard - {max_img - min_img}")
+    # Store and plot results
+    store_results(scores_1, "Jaccard", min_img, max_img, param_range)
+    plt.plot(param_range, [i for i in scores_1], label="Mesure de la classification par Jaccard")
+    plt.plot(param_range, scores_2, label=f"Mesure de la classification des roches")
+    plt.title(label="Variation de la classification en fonction du pourcentage de grosses roches")
     plt.legend()
     plt.show()
+
+    # Measure execution time
     time_execution = timeit.timeit() - start
-    print(f"time execution :{time_execution}")
