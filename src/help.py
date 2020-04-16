@@ -12,7 +12,7 @@ def plotter(image, title="test"):
 def plotter_mult(*args, title=[]):
     nb_images = len(args)
     columns = 3
-    rows = nb_images / 3
+    rows = int(nb_images / 3) + 1
     plt.figure(figsize=(columns * 10, rows * 10))
 
     for i in range(0, nb_images):

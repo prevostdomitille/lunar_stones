@@ -2,6 +2,7 @@ import queue
 import timeit
 from multiprocessing import Process, Queue, Array, Lock
 import numpy as np
+import matplotlib.pyplot as plt
 import pickle
 from src import ImageMoon
 
@@ -23,29 +24,28 @@ def store_results(arr, title_test, nb_images):
         fp.write(f"Nombre d'images : {nb_images}")
 
 
-def run(img_number, scores):
+def run(img_number, scores_count, scores_jaccard, t):
     img = ImageMoon.ImageMoon(img_number)
-    tmp_score = np.zeros(len(scores))
-    for j in range(0, 50):
-        percent = 0.95 + j / 1000
+    tmp_score_count = np.zeros(len(t))
+    tmp_jaccard = np.zeros(len(t))
+    for j in range(len(t)):
+        percent = t[j]
         img.make_contours(percent, 0.1, 7000)
-        true_pos, false_pos = img.compute_score()
-        pixel_diff = img.nb_pixels_in_rock()
-        if true_pos or false_pos:
-            # tmp_score[j] = tmp_score[j] + (true_pos / (true_pos + false_pos))
-            tmp_score[j] = tmp_score[j] + pixel_diff / (480 * 720)
-    for itr in range(len(scores)):
-        scores[itr] = scores[itr] + tmp_score[itr]
+        tmp_score_count[j] = tmp_score_count[j] + img.score_false_positives()
+        tmp_jaccard[j] = tmp_jaccard[j] + img.score_jaccard()
+    for itr in range(len(t)):
+        scores_count[itr] = scores_count[itr] + tmp_score_count[itr]
+        scores_jaccard[itr] = scores_jaccard[itr] + tmp_jaccard[itr]
 
 
-def do_job(tasks_to_accomplish, scores):
+def do_job(tasks_to_accomplish, scores_count, scores_jaccard, t):
     while True:
         try:
             img_number = tasks_to_accomplish.get_nowait()
         except queue.Empty:
             break
         else:
-            run(img_number, scores)
+            run(img_number, scores_count, scores_jaccard, t)
 
 
 if __name__ == "__main__":
@@ -54,17 +54,21 @@ if __name__ == "__main__":
     tasks_to_accomplish = Queue()
     processes = []
     # the images to make the statistics on
-    ran = range(500, 800)
-    # the scores for a threshold varying from 0.95 to 1
+    min_img = 500
+    max_img = 700
+    ran = range(min_img, max_img)
     # the threshold is the percentage of the image that is a rock
-    scores = Array('d', 50, lock=lock)
+    t = np.linspace(0.90, 0.990, num=100)
+    scores_jac = Array('d', len(t), lock=lock)
+    # the scores for a threshold varying from 0.95 to 1
+    scores = Array('d', len(t), lock=lock)
 
     for i in ran:
         tasks_to_accomplish.put(i)
     start = timeit.timeit()
 
     for w in range(number_of_processes):
-        p = Process(target=do_job, args=(tasks_to_accomplish, scores))
+        p = Process(target=do_job, args=(tasks_to_accomplish, scores, scores_jac, t))
         processes.append(p)
         p.start()
 
@@ -72,6 +76,9 @@ if __name__ == "__main__":
         p.join()
 
     store_results(scores, "False negative optimisation", 300)
+    plt.plot(t, [i / 30 for i in scores], label="Rock Count")
+    plt.plot(t, scores_jac, label=f"Jaccard - {max_img - min_img}")
+    plt.legend()
+    plt.show()
     time_execution = timeit.timeit() - start
     print(f"time execution :{time_execution}")
-    print(scores[:])

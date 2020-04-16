@@ -2,8 +2,9 @@ import copy
 
 import cv2 as cv
 import numpy as np
+import tabulate
 import matplotlib.pyplot as plt
-from src.help import to_string, plotter_mult
+from src.help import to_string, plotter_mult, plotter
 
 PATH = "/Users/domitilleprevost/Documents/PROJET_DEEP/artificial-lunar-rocky-landscape-dataset/images/"
 
@@ -42,6 +43,10 @@ def make_list_values_of_contours(contours):
 
 
 def make_centers(contours):
+    """
+    :param contours : A list of contours
+    :return centers :  A list of tuples representing the centers of the contours (coordinates)
+    """
     centers = []
     for cont in contours:
         M = cv.moments(cont)
@@ -53,6 +58,10 @@ def make_centers(contours):
 
 
 def draw_centers(image, centers, color=""):
+    """
+
+    """
+
     im = copy.deepcopy(image)
     im = cv.cvtColor(im, cv.COLOR_GRAY2BGR)
     for cent in centers:
@@ -62,7 +71,7 @@ def draw_centers(image, centers, color=""):
             cv.circle(im, (cent[0], cent[1]), 5, (0, 255, 0), -1)
         else:
             cv.circle(im, (cent[0], cent[1]), 5, (255, 255, 255), -1)
-    # plotter(im)
+    plotter(im)
     return centers
 
 
@@ -78,6 +87,19 @@ def compute_accuracy_positives(centers, truth):
         except IndexError:
             print("warning with index value")
     return nb_true, nb_false
+
+
+def find_threshold_no_sky(percentage, image):
+    j = 10
+    thresh_value = 0
+    nb_pixels = (count_pixels(image, 255) - count_pixels(image, 10))
+    while j < 255:
+        cur = (count_pixels(image, (j + 1)) - count_pixels(image,
+                                                                 10)) / nb_pixels  # - count_pixels(image, j * 10)
+        if cur > percentage and thresh_value == 0:
+            thresh_value = j + 1
+        j = j + 1
+    return thresh_value
 
 
 class ImageMoon:
@@ -97,57 +119,34 @@ class ImageMoon:
         if len(self.render) == 0:
             raise ValueError(f"image {self.name_render} not found")
 
+    def ground_gray(self):
+        sp = cv.split(self.ground)
+        mask = sp[0] + sp[1]
+        return mask
+
     def shape(self):
         return self.render.shape
-
-    def disp_truth(self):
-        plotter_mult(self.ground, self.truth_small_rocks(), self.truth_big_rocks(),
-                     title=["ground_truth", "Small rocks", "Big rocks"])
-
-    def truth_small_rocks(self):
-        b_img = cv.split(self.ground)
-        _, img_small_rocks = cv.threshold(b_img[1], 127, 255, cv.THRESH_BINARY)
-        return img_small_rocks
 
     def truth_big_rocks(self):
         b_img = cv.split(self.ground)
         _, img_big_rocks = cv.threshold(b_img[0], 127, 255, cv.THRESH_BINARY)
         return img_big_rocks
 
-    def nb_pixels_in_rock(self):
-        self.make_results()
+    def truth_small_rocks(self):
         b_img = cv.split(self.ground)
-        nb_pix = cv.countNonZero(b_img[0]) + cv.countNonZero(b_img[1])
-        nb_predicted = cv.countNonZero(cv.cvtColor(self.result, cv.COLOR_BGR2GRAY))
-        return abs(nb_pix - nb_predicted)
+        _, img_small_rocks = cv.threshold(b_img[1], 127, 255, cv.THRESH_BINARY)
+        return img_small_rocks
 
-    def find_threshold_no_sky(self, percentage):
-        j = 10
-        thresh_value = 0
-        nb_pixels = (count_pixels(self.render, 255) - count_pixels(self.render, 10))
-        while j < 255:
-            cur = (count_pixels(self.render, (j + 1)) - count_pixels(self.render,
-                                                                     10)) / nb_pixels  # - count_pixels(image, j * 10)
-            if cur > percentage and thresh_value == 0:
-                thresh_value = j + 1
-            j = j + 1
-        return thresh_value
+    def disp_truth(self):
+        plotter_mult(self.ground, self.truth_small_rocks(), self.truth_big_rocks(),
+                     title=["ground_truth", "Small rocks", "Big rocks"])
 
-    def threshold(self, thresh):
-        ret, thresh1 = cv.threshold(self.render_blur, thresh, 255, cv.THRESH_BINARY)
-        return thresh1
-
-    def make_results(self):
+    def prediction_image(self):
         mask = np.zeros(self.shape(), np.uint8)
         mask = cv.cvtColor(mask, cv.COLOR_GRAY2BGR)
         cv.drawContours(mask, self.contours_small, -1, (255, 0, 0), -1)
         cv.drawContours(mask, self.contours_big, -1, (0, 0, 255), -1)
-        self.result = mask
-
-    def find_contours(self, thresh):
-        ret, img = cv.threshold(self.render_blur, thresh, 255, cv.THRESH_BINARY)
-        contours, image = cv.findContours(img, cv.RETR_TREE, cv.CHAIN_APPROX_NONE)
-        self.contours = contours
+        self.prediction = mask
 
     def filter_contours(self, contours, nb_big_rocks, min_value):
         contours_big = []
@@ -162,31 +161,62 @@ class ImageMoon:
                 contours_small.append(hull)
         self.contours_small = contours_small
         self.contours_big = contours_big
+        self.contours = contours_small + contours_big
         return contours_small, contours_big
 
-    def make_contours(self, percentage_luminosity, nb_big_rocks, min_value):
-        thresh_luminosity = self.find_threshold_no_sky(percentage_luminosity)
-        self.find_contours(thresh_luminosity)
-        self.prediction = self.filter_contours(self.contours, nb_big_rocks, min_value)
+    def find_contours(self, thresh):
+        ret, img = cv.threshold(self.render_blur, thresh, 255, cv.THRESH_BINARY)
+        contours, image = cv.findContours(img, cv.RETR_TREE, cv.CHAIN_APPROX_NONE)
+        self.contours = contours
 
-    def compute_score(self):
+    def make_contours(self, percentage_luminosity, nb_big_rocks, min_value):
+        thresh_luminosity = find_threshold_no_sky(percentage_luminosity, self.render)
+        self.find_contours(thresh_luminosity)
+        self.filter_contours(self.contours, nb_big_rocks, min_value)
+
+    def score_false_negatives(self):
+        self.prediction_image()
+        nb_pix = cv.countNonZero(self.ground_gray())
+        nb_predicted = cv.countNonZero(cv.cvtColor(self.prediction, cv.COLOR_BGR2GRAY))
+        return abs(nb_pix - nb_predicted) / nb_pix
+
+    def score_false_positives(self):
+        centers = make_centers(self.contours)
+        true_pos_any, false_pos_any = compute_accuracy_positives(centers, self.ground_gray())
+        if len(self.contours) == 0:
+            return true_pos_any
+        return true_pos_any / len(self.contours)
+
+    def score_jaccard(self):
+        self.prediction_image()
+        truth = self.ground_gray()
+        pred = cv.cvtColor(self.prediction, cv.COLOR_BGR2GRAY)
+        intersec = cv.bitwise_and(truth, pred)
+        union = cv.bitwise_or(truth, pred)
+        if cv.countNonZero(union) == 0:
+            return 0
+        jaccard_score = cv.countNonZero(intersec) / cv.countNonZero(union)
+        return jaccard_score
+
+    def detailed_scores_false_positives(self):
+        if not self.contours_big:
+            self.make_contours(0.99, 0.1, 8000)
+
         centers_big = make_centers(self.contours_big)
         centers_small = make_centers(self.contours_small)
+        centers = make_centers(self.contours)
+
         draw_centers(self.truth_big_rocks(), centers_big, color="green")
         draw_centers(self.truth_small_rocks(), centers_small, color="green")
         true_pos_big, false_pos_big = compute_accuracy_positives(centers_small, self.truth_small_rocks())
         true_pos_small, false_pos_small = compute_accuracy_positives(centers_big, self.truth_big_rocks())
-        img_any = cv.cvtColor(self.ground, cv.COLOR_BGR2GRAY)
+        true_pos_any, false_pos_any = compute_accuracy_positives(centers, self.ground_gray())
 
-        true_pos_any, false_pos_any = compute_accuracy_positives(centers_big, img_any)
-        tmp1, tmp2 = compute_accuracy_positives(centers_small, img_any)
-        true_pos_any += tmp1
-        false_pos_any += tmp2
-        # mydata = [("Petites roches", "|", true_pos_big, false_pos_big),
-        #           ("Grandes roches", "|", true_pos_small, false_pos_small),
-        #           ("Toutes roches", "|", true_pos_any, false_pos_any)]
-        # headers = ["Type", "", "Vrai positif", "Faux positifs"]
-        # print(tabulate(mydata, headers))
+        mydata = [("Petites roches", "|", true_pos_big, false_pos_big),
+                  ("Grandes roches", "|", true_pos_small, false_pos_small),
+                  ("Toutes roches", "|", true_pos_any, false_pos_any)]
+        headers = ["Type", "", "Vrai positif", "Faux positifs"]
+        print(tabulate.tabulate(mydata, headers))
         return true_pos_any, false_pos_any
 
     def cumulated_histogram_dense(self):
@@ -204,3 +234,16 @@ class ImageMoon:
         plt.plot(x, t, label=f"{self.shape}")
         plt.show()
         return t
+
+
+if __name__ == "__main__":
+    im = ImageMoon(2)
+    for i in range(300, 500):
+        im = ImageMoon(i)
+        im.make_contours(0.97, 0.1, 1000)
+        im.score_jaccard()
+
+    im.make_contours(0.97, 0.1, 1000)
+    print(im.score_false_negatives())
+    im.score_jaccard()
+    print(im.shape()[0])
