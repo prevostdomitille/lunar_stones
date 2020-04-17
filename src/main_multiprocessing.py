@@ -42,9 +42,10 @@ def run(img_number, scores_1, scores_2, params):
     tmp_2 = np.zeros(len(params))
     for j in range(len(params)):
         par = params[j]
-        img.make_contours(0.99, par, 6000)
-        tmp_1[j] = tmp_1[j] + img.scores_jaccard_classified()
-        tmp_2[j] = tmp_2[j] + img.score_false_positives_classified()
+        img.make_contours(0.99, par, 2000)
+        score_any, score_small, score_big = img.scores_jaccard()
+        tmp_1[j] = tmp_1[j] + score_small
+        tmp_2[j] = tmp_2[j] + score_big
     for itr in range(len(params)):
         scores_1[itr] = scores_1[itr] + tmp_1[itr]
         scores_2[itr] = scores_2[itr] + tmp_2[itr]
@@ -67,11 +68,11 @@ if __name__ == "__main__":
     lock = Lock()
 
     # Chose the images to work on
-    min_img = 700
-    max_img = 900
+    min_img = 600
+    max_img = 800
     nb_images = max_img - min_img
     # Chose the range of the parameter we want to evaluate
-    param_range = np.linspace(0.05, 0.3, num=50)
+    param_range = np.linspace(0.05, 0.5, num=100)
     # the scores for parameter varying in param_range
     # they are multiprocessing objects
     scores_1 = Array('d', len(param_range), lock=lock)
@@ -98,9 +99,12 @@ if __name__ == "__main__":
 
     # Store and plot results
     store_results(scores_1, "Jaccard", min_img, max_img, param_range)
-    plt.plot(param_range, [i for i in scores_1], label="Mesure de la classification par Jaccard")
-    plt.plot(param_range, scores_2, label=f"Mesure de la classification des roches")
-    plt.title(label="Variation de la classification en fonction du pourcentage de grosses roches")
+    plt.plot(param_range, [i/nb_images for i in scores_1], 'r', label=f"Score de Jaccard pour les petites roches", )
+    plt.plot(param_range, [i/nb_images for i in scores_2], label="Score de Jaccard pour les grandes roches")
+    plt.title(label="Variation des scores de Jaccard en fonction du pourcentage de grandes images", fontsize=8)
+    plt.xlabel("Proportion de grandes images")
+    plt.ylabel(f"Scores moyens sur {nb_images} images")
+
     plt.legend()
     plt.show()
 
